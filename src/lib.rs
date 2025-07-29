@@ -5,7 +5,6 @@ use controllers::{
     addon_config::{
         AddonConfigSyncError, DynamicWatcherError, FleetPatchError, ReconcileConfigSyncError,
     },
-    helm,
 };
 use futures::channel::mpsc::TrySendError;
 use thiserror::Error;
@@ -32,9 +31,6 @@ pub enum Error {
 
     #[error("Fleet repo add error: {0}")]
     RepoAdd(#[from] helm::RepoAddError),
-
-    #[error("Fleet repo update error: {0}")]
-    RepoUpdate(#[from] helm::RepoUpdateError),
 
     #[error("Error waiting for commadnd: {0}")]
     CommandError(#[from] io::Error),
@@ -65,6 +61,7 @@ impl Error {
 /// Expose all controller components used by main
 pub mod controller;
 pub use crate::controller::*;
+use crate::controllers::helm;
 pub mod api;
 pub mod controllers;
 mod multi_dispatcher;

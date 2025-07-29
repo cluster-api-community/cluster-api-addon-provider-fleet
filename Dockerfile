@@ -3,8 +3,10 @@ ARG BUILDPLATFORM
 ARG TARGETPLATFORM
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --target aarch64-unknown-linux-musl  --default-toolchain stable
+RUN curl -LO https://go.dev/dl/go1.22.11.linux-arm64.tar.gz && tar -C /usr/local -xzf go1.22.11.linux-arm64.tar.gz
+RUN apt-get install -y libclang-dev musl-tools
 
-ENV PATH=/root/.cargo/bin:$PATH
+ENV PATH=/root/.cargo/bin:/usr/local/go/bin:$PATH
 RUN cargo --version
 
 WORKDIR /usr/src
@@ -21,8 +23,10 @@ ARG BUILDPLATFORM
 ARG TARGETPLATFORM
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --target x86_64-unknown-linux-musl  --default-toolchain stable
+RUN curl -LO https://go.dev/dl/go1.22.11.linux-amd64.tar.gz && tar -C /usr/local -xzf go1.22.11.linux-amd64.tar.gz
+RUN apt-get install -y libclang-dev musl-tools
 
-ENV PATH=/root/.cargo/bin:$PATH
+ENV PATH=/root/.cargo/bin:/usr/local/go/bin:$PATH
 RUN cargo --version
 
 WORKDIR /usr/src

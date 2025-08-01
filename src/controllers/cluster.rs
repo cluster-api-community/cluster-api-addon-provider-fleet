@@ -308,28 +308,14 @@ impl Cluster {
         ns: Arc<Namespace>,
         ctx: Arc<Context>,
     ) -> crate::Result<Action> {
-        if ctx.version >= 32 {
-            ctx.stream.stream.lock().await.push(
-                watcher::watcher(
-                    Api::namespaced_with(
-                        ctx.client.clone(),
-                        &ns.name_any(),
-                        &ApiResource::erase::<Cluster>(&()),
-                    ),
-                    Config::default().streaming_lists(),
-                )
-                .boxed(),
-            );
-        } else {
-            ctx.stream.stream.lock().await.push(
-                watcher::watcher(
-                    Api::<Cluster>::namespaced(ctx.client.clone(), &ns.name_any()),
-                    Config::default(),
-                )
-                .map(to_dynamic_event)
-                .boxed(),
-            );
-        }
+        ctx.stream.stream.lock().await.push(
+            watcher::watcher(
+                Api::<Cluster>::namespaced(ctx.client.clone(), &ns.name_any()),
+                Config::default(),
+            )
+            .map(to_dynamic_event)
+            .boxed(),
+        );
 
         let name = ns.name_any();
         info!("Reconciled dynamic watches: added namespace watch on {name}");

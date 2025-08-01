@@ -7,21 +7,17 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Install just
-        run: cargo install just
-      - uses: actions/checkout@v4
-      - name: Build
-        run: just compile
-
   test:
     runs-on: ubuntu-latest
     steps:
       - name: Install just
         run: cargo install just
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5.5.0
+        with:
+          go-version: '1.24'
+          check-latest: true
+          cache: true
       - name: Test
         run: just test-unit
 
@@ -31,9 +27,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - kube_version: "1.30.4"
-            display_name: "stable"
-          - kube_version: "1.32.0"
+          - kube_version: "1.33.0"
             display_name: "latest"
     env:
       KUBE_VERSION: ${{ matrix.kube_version }}
@@ -44,7 +38,7 @@ jobs:
         uses: helm/kind-action@v1
         with:
           install_only: true
-          version: v0.26.0
+          version: v0.29.0
       - uses: actions/checkout@v4
       - name: Test (Cluster Class) - ${{ matrix.display_name }}
         run: just test-cluster-class-import
@@ -64,9 +58,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - kube_version: "1.30.4"
-            display_name: "stable"
-          - kube_version: "1.32.0"
+          - kube_version: "1.33.0"
             display_name: "latest"
     env:
       KUBE_VERSION: ${{ matrix.kube_version }}
@@ -77,7 +69,7 @@ jobs:
         uses: helm/kind-action@v1
         with:
           install_only: true
-          version: v0.26.0
+          version: v0.29.0
       - uses: actions/checkout@v4
       - name: Test (Import) - ${{ matrix.display_name }}
         run: just test-import
@@ -97,9 +89,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - kube_version: "1.30.4"
-            display_name: "stable"
-          - kube_version: "1.32.0"
+          - kube_version: "1.33.0"
             display_name: "latest"
     env:
       KUBE_VERSION: ${{ matrix.kube_version }}
@@ -110,7 +100,7 @@ jobs:
         uses: helm/kind-action@v1
         with:
           install_only: true
-          version: v0.26.0
+          version: v0.29.0
       - uses: actions/checkout@v4
       - name: Test (Import RKE2) - ${{ matrix.display_name }}
         run: just test-import-rke2

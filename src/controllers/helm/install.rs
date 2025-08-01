@@ -10,8 +10,7 @@ use crate::{
     },
 };
 use helm_r2g::{
-    HelmCall, HelmCallImpl, AddRequest, InstallRequest, ListRequest,
-    SearchRequest, UpgradeRequest,
+    AddRequest, HelmCall, HelmCallImpl, InstallRequest, ListRequest, SearchRequest, UpgradeRequest,
 };
 
 use super::{FleetCRDInstallResult, FleetInstallResult, MetadataGetResult, RepoSearchResult};
@@ -158,7 +157,7 @@ impl FleetChart {
             wait: self.wait,
             ns: self.namespace.clone(),
             version: match self.version.clone().unwrap_or_default() {
-                Install::FollowLatest(_) => "".to_string(),
+                Install::FollowLatest(_) => String::new(),
                 Install::Version(version) => version,
             },
             values: serde_json::to_vec(&json!({
@@ -199,7 +198,7 @@ impl FleetChart {
             ns: self.namespace.clone(),
             reuse_values: true,
             version: match self.version.clone().unwrap_or_default() {
-                Install::FollowLatest(_) => "".to_string(),
+                Install::FollowLatest(_) => String::new(),
                 Install::Version(version) => version,
             },
             values: serde_json::to_vec(&json!({
@@ -216,8 +215,7 @@ impl FleetChart {
                         "value": self.feature_gates.experimental_helm_ops.to_string()
                     }
                 ]
-            }))
-            .unwrap(),
+            }))?,
             ..Default::default()
         };
 
@@ -241,7 +239,7 @@ impl FleetChart {
             ns: self.namespace.clone(),
             timeout: vec![300],
             version: match self.version.clone().unwrap_or_default() {
-                Install::FollowLatest(_) => "".to_string(),
+                Install::FollowLatest(_) => String::new(),
                 Install::Version(version) => version,
             },
             ..Default::default()
@@ -266,7 +264,7 @@ impl FleetChart {
             wait: self.wait,
             ns: self.namespace.clone(),
             version: match self.version.clone().unwrap_or_default() {
-                Install::FollowLatest(_) => "".to_string(),
+                Install::FollowLatest(_) => String::new(),
                 Install::Version(version) => version,
             },
             ..Default::default()

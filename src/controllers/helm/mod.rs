@@ -46,7 +46,6 @@ pub enum RepoAddError {
     RepoAdd(String),
 }
 
-
 pub type RepoSearchResult<T> = std::result::Result<T, RepoSearchError>;
 
 #[derive(Error, Debug)]

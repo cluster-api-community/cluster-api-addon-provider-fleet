@@ -38,10 +38,7 @@ use crate::{
 use super::{
     PatchError,
     controller::{Context, patch},
-    helm::{
-        self,
-        install::FleetChart,
-    },
+    helm::{self, install::FleetChart},
 };
 
 #[derive(Resource, Serialize, Deserialize, Default, Clone, Debug)]
@@ -204,38 +201,17 @@ impl FleetAddonConfig {
         let mut stream = ctx.stream.stream.lock().await;
         stream.clear();
 
-        if ctx.version >= 32 {
-            stream.push(
-                watcher::watcher(
-                    Api::all_with(ctx.client.clone(), &ApiResource::erase::<Cluster>(&())),
-                    cluster_config.streaming_lists(),
-                )
+        stream.push(
+            watcher::watcher(Api::<Cluster>::all(ctx.client.clone()), cluster_config)
+                .map(to_dynamic_event)
                 .boxed(),
-            );
+        );
 
-            stream.push(
-                watcher::watcher(
-                    Api::all_with(
-                        ctx.client.clone(),
-                        &ApiResource::erase::<v1::Namespace>(&()),
-                    ),
-                    ns_config.streaming_lists(),
-                )
+        stream.push(
+            watcher::watcher(Api::<v1::Namespace>::all(ctx.client.clone()), ns_config)
+                .map(to_dynamic_event)
                 .boxed(),
-            );
-        } else {
-            stream.push(
-                watcher::watcher(Api::<Cluster>::all(ctx.client.clone()), cluster_config)
-                    .map(to_dynamic_event)
-                    .boxed(),
-            );
-
-            stream.push(
-                watcher::watcher(Api::<v1::Namespace>::all(ctx.client.clone()), ns_config)
-                    .map(to_dynamic_event)
-                    .boxed(),
-            );
-        }
+        );
 
         info!(
             "Reconciled dynamic watches to match selectors: namespace={ns_selector}, cluster={cluster_selector}"
@@ -399,7 +375,7 @@ impl FleetAddonConfig {
                     type_: "Installed".into(),
                 });
             }
-            (None, Some(_), Install::FollowLatest(_)) | (None, Some(_), Install::Version(_)) => {
+            (None, Some(_), Install::FollowLatest(_) | Install::Version(_)) => {
                 let info = chart.install_fleet().await?;
                 let version = info.chart.metadata.app_version;
                 status.installed_version = Some(version.clone());

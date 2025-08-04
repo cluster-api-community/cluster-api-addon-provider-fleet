@@ -7,10 +7,10 @@ pub type FleetInstallResult<T> = std::result::Result<T, FleetInstallError>;
 #[derive(Error, Debug)]
 pub enum FleetInstallError {
     #[error("Fleet install error: {0}")]
-    FleetInstall(String),
+    FleetInstall(#[from] helm_r2g::install::InstallError),
 
     #[error("Fleet upgrade error: {0}")]
-    FleetUpgrade(String),
+    FleetUpgrade(#[from] helm_r2g::upgrade::UpgradeError),
 
     #[error("Deserialize install error: {0}")]
     DeserializeInstallError(#[from] serde_json::Error),
@@ -29,10 +29,10 @@ pub type FleetCRDInstallResult<T> = std::result::Result<T, FleetCRDInstallError>
 #[derive(Error, Debug)]
 pub enum FleetCRDInstallError {
     #[error("CRD install error: {0}")]
-    CRDInstall(String),
+    CRDInstall(#[from] helm_r2g::install::InstallError),
 
     #[error("CRD upgrade error: {0}")]
-    CRDUpgrade(String),
+    CRDUpgrade(#[from] helm_r2g::upgrade::UpgradeError),
 
     #[error("Deserialize install response error: {0}")]
     DeserializeInstallError(#[from] serde_json::Error),
@@ -43,7 +43,7 @@ pub type RepoAddResult<T> = std::result::Result<T, RepoAddError>;
 #[derive(Error, Debug)]
 pub enum RepoAddError {
     #[error("Fleet repo add error: {0}")]
-    RepoAdd(String),
+    RepoAdd(#[from] helm_r2g::repo_add::RepoAddError),
 }
 
 pub type RepoSearchResult<T> = std::result::Result<T, RepoSearchError>;
@@ -51,7 +51,7 @@ pub type RepoSearchResult<T> = std::result::Result<T, RepoSearchError>;
 #[derive(Error, Debug)]
 pub enum RepoSearchError {
     #[error("Fleet repo search error: {0}")]
-    RepoSearch(String),
+    RepoSearch(#[from] helm_r2g::repo_search::RepoSearchError),
 
     #[error("Deserialize search error: {0}")]
     DeserializeInfoError(#[from] serde_json::Error),
@@ -62,7 +62,7 @@ pub type MetadataGetResult<T> = std::result::Result<T, MetadataGetError>;
 #[derive(Error, Debug)]
 pub enum MetadataGetError {
     #[error("Metadata get error: {0}")]
-    MetadataGet(String),
+    MetadataGet(#[from] helm_r2g::list::ListError),
 
     #[error("Deserialize info error: {0}")]
     DeserializeInfoError(#[from] serde_json::Error),

@@ -10,7 +10,7 @@ use k8s_openapi::{
 };
 use kube::{
     Api, Resource, ResourceExt,
-    api::{ApiResource, DynamicObject, ObjectMeta, PatchParams, TypeMeta},
+    api::{DynamicObject, ObjectMeta, PatchParams, TypeMeta},
     client::scope::Namespace,
     core::object::HasSpec,
     runtime::{

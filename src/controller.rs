@@ -19,7 +19,7 @@ use kube::api::{Patch, PatchParams};
 use kube::core::DeserializeGuard;
 use kube::runtime::reflector::ObjectRef;
 use kube::runtime::reflector::store::Writer;
-use kube::runtime::{WatchStreamExt, metadata_watcher, predicates, reflector, watcher};
+use kube::runtime::{WatchStreamExt, controller, metadata_watcher, predicates, reflector, watcher};
 use kube::{Resource, ResourceExt};
 use kube::{
     api::Api,
@@ -220,7 +220,9 @@ pub async fn run_fleet_helm_controller(state: State) {
     .default_with_reflect(writer)
     .predicate_filter(predicates::generation);
 
+    let config = controller::Config::default().concurrency(1);
     let fleet_addon_config_controller = Controller::for_stream(fleet_addon_config, reader)
+        .with_config(config)
         .shutdown_on_signal()
         .run(
             |obj, ctx| async move {

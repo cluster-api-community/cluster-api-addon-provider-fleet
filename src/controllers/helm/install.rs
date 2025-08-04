@@ -1,14 +1,19 @@
-use std::{fmt::Display, process::Stdio};
-
 use serde::Deserialize;
-use tokio::process::{Child, Command};
+use serde_json::json;
+use tracing::debug;
 
-use crate::api::fleet_addon_config::{FeatureGates, Install};
-
-use super::{
-    FleetCRDInstallResult, FleetInstallResult, MetadataGetResult, RepoAddResult, RepoSearchResult,
-    RepoUpdateResult,
+use crate::{
+    api::fleet_addon_config::{FeatureGates, Install},
+    controllers::helm::{
+        FleetCRDInstallError, FleetInstallError, MetadataGetError, RepoAddError, RepoAddResult,
+        RepoSearchError,
+    },
 };
+use helm_r2g::{
+    AddRequest, HelmCall, HelmCallImpl, InstallRequest, ListRequest, SearchRequest, UpgradeRequest,
+};
+
+use super::{FleetCRDInstallResult, FleetInstallResult, MetadataGetResult, RepoSearchResult};
 
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Default, Clone)]
@@ -26,33 +31,49 @@ pub struct FleetChart {
     pub feature_gates: FeatureGates,
 }
 
-#[derive(PartialEq)]
-pub enum HelmOperation {
-    Install,
-    Upgrade,
-}
-
-impl Display for HelmOperation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            HelmOperation::Install => f.write_str("install"),
-            HelmOperation::Upgrade => f.write_str("upgrade"),
-        }
-    }
-}
-
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct ChartInfo {
     pub name: String,
     pub namespace: String,
+    #[serde(default)]
+    pub chart: Chart,
+    pub info: Info,
+}
+
+#[derive(Deserialize, Debug, Default, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Chart {
+    #[serde(default)]
+    pub metadata: Metadata,
+}
+
+#[derive(Deserialize, Debug, Default, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Metadata {
+    #[serde(default)]
     pub app_version: String,
+    pub name: String,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Info {
     pub status: String,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "PascalCase")]
 pub struct ChartSearch {
     pub name: String,
-    pub app_version: String,
+    #[serde(default)]
+    pub chart: EmbeddedChart,
+}
+
+#[derive(Deserialize, Debug, Default, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddedChart {
+    #[serde(flatten)]
+    pub metadata: Metadata,
 }
 
 impl FleetChart {
@@ -61,21 +82,21 @@ impl FleetChart {
     /// # Errors
     ///
     /// This function will return an error if the helm command fails to spawn.
-    pub fn add_repo(&self) -> RepoAddResult<Child> {
-        Ok(Command::new("helm")
-            .args(["repo", "add", "fleet", &self.repo])
-            .spawn()?)
-    }
+    pub async fn add_repo(&self) -> RepoAddResult<()> {
+        let req = AddRequest {
+            name: "fleet".to_string(),
+            url: self.repo.clone(),
+            ..Default::default()
+        };
 
-    /// Updates the fleet helm repository.
-    ///
-    /// # Errors
-    ///
-    /// This function will return an error if the helm command fails to spawn.
-    pub fn update_repo(&self) -> RepoUpdateResult<Child> {
-        Ok(Command::new("helm")
-            .args(["repo", "update", "fleet"])
-            .spawn()?)
+        debug!("Adding fleet helm repository");
+
+        let res = HelmCallImpl::repo_add(req).await;
+        if let Some(err) = res.0.err.first() {
+            return Err(RepoAddError::RepoAdd(err.clone()));
+        }
+
+        Ok(())
     }
 
     /// Searches the fleet helm repository for charts.
@@ -84,15 +105,19 @@ impl FleetChart {
     ///
     /// This function will return an error if the helm command fails to spawn or the output cannot be parsed.
     pub async fn search_repo(&self) -> RepoSearchResult<Vec<ChartSearch>> {
-        let result = Command::new("helm")
-            .stdout(Stdio::piped())
-            .args(["search", "repo", "fleet", "-o", "json"])
-            .spawn()?
-            .wait_with_output()
-            .await?;
+        let req = SearchRequest {
+            terms: vec!["fleet".to_string()],
+            ..Default::default()
+        };
 
-        let output = &String::from_utf8(result.stdout)?;
-        Ok(serde_json::from_str(output)?)
+        debug!("Searching fleet helm repository");
+
+        let res = HelmCallImpl::repo_search(req).await;
+        if let Some(err) = res.0.err.first() {
+            return Err(RepoSearchError::RepoSearch(err.clone()));
+        }
+
+        Ok(serde_json::from_str(&res.0.data)?)
     }
 
     /// Gets metadata for a specific chart.
@@ -101,111 +126,157 @@ impl FleetChart {
     ///
     /// This function will return an error if the helm command fails to spawn or the output cannot be parsed.
     pub async fn get_metadata(chart: &str) -> MetadataGetResult<Option<ChartInfo>> {
-        let mut metadata = Command::new("helm");
-        metadata.args(["list", "-A", "-o", "json"]);
+        let req = ListRequest {
+            all: true,
+            all_namespaces: true,
+            ..Default::default()
+        };
 
-        let run = metadata
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
-        let result = run.wait_with_output().await?;
-        let error = String::from_utf8(result.stderr)?;
-        if result.status.code() == Some(1) && &error == "Error: release: not found" {
+        debug!("Listing helm charts metadata");
+
+        let res = HelmCallImpl::list(req).await;
+        if let Some(err) = res.0.err.first() {
+            return Err(MetadataGetError::MetadataGet(err.clone()));
+        }
+
+        if res.0.data.is_empty() {
             return Ok(None);
         }
 
-        let output = &String::from_utf8(result.stdout)?;
-        let infos: Vec<ChartInfo> = serde_json::from_str(output)?;
+        let infos: Vec<ChartInfo> = serde_json::from_str(&res.0.data)?;
 
         Ok(infos.into_iter().find(|i| i.name == chart))
     }
 
-    /// Installs or upgrades the fleet chart.
-    ///
-    /// # Errors
-    ///
-    /// This function will return an error if the helm command fails to spawn.
-    pub fn fleet(&self, operation: &HelmOperation) -> FleetInstallResult<Child> {
-        let mut install = Command::new("helm");
+    /// Installs the fleet chart.
+    pub async fn install_fleet(&self) -> FleetInstallResult<ChartInfo> {
+        let req = InstallRequest {
+            release_name: "fleet".to_string(),
+            chart: "fleet/fleet".to_string(),
+            create_namespace: self.create_namespace,
+            wait: self.wait,
+            ns: self.namespace.clone(),
+            version: match self.version.clone().unwrap_or_default() {
+                Install::FollowLatest(_) => String::new(),
+                Install::Version(version) => version,
+            },
+            values: serde_json::to_vec(&json!({
+                "bootstrap": {
+                    "enabled": self.bootstrap_local_cluster.to_string(),
+                },
+                "extraEnv": [
+                    {
+                        "name": "EXPERIMENTAL_OCI_STORAGE",
+                        "value": self.feature_gates.experimental_oci_storage.to_string()
+                    },
+                    {
+                        "name": "EXPERIMENTAL_HELM_OPS",
+                        "value": self.feature_gates.experimental_helm_ops.to_string()
+                    }
+                ]
+            }))
+            .unwrap(),
+            ..Default::default()
+        };
 
-        install.args([&operation.to_string(), "fleet", "fleet/fleet"]);
-        let oci = self.feature_gates.experimental_oci_storage;
-        let helm_ops = self.feature_gates.experimental_oci_storage;
-        install.args([
-            "--set-string",
-            "extraEnv[0].name=EXPERIMENTAL_OCI_STORAGE",
-            "--set-string",
-            &format!("extraEnv[0].value={oci}",),
-            "--set-string",
-            "extraEnv[1].name=EXPERIMENTAL_HELM_OPS",
-            "--set-string",
-            &format!("extraEnv[1].value={helm_ops}",),
-        ]);
+        debug!("Installing fleet chart");
 
-        if operation == &HelmOperation::Upgrade {
-            install.arg("--reuse-values");
+        let res = HelmCallImpl::install(req).await;
+        if let Some(err) = res.0.err.first() {
+            return Err(FleetInstallError::FleetInstall(err.clone()));
         }
 
-        if self.create_namespace {
-            install.arg("--create-namespace");
-        }
-
-        if !self.namespace.is_empty() {
-            install.args(["--namespace", &self.namespace]);
-        }
-
-        match self.version.clone().unwrap_or_default() {
-            Install::FollowLatest(_) => {}
-            Install::Version(version) => {
-                install.args(["--version", &version]);
-            }
-        }
-
-        if self.wait {
-            install.arg("--wait");
-        }
-
-        install.args([
-            "--set",
-            &format!("bootstrap.enabled={}", self.bootstrap_local_cluster),
-        ]);
-
-        Ok(install.spawn()?)
+        Ok(serde_json::from_str(&res.0.data)?)
     }
 
-    /// Installs or upgrades the fleet-crd chart.
-    ///
-    /// # Errors
-    ///
-    /// This function will return an error if the helm command fails to spawn.
-    pub fn fleet_crds(&self, operation: &HelmOperation) -> FleetCRDInstallResult<Child> {
-        let mut install = Command::new("helm");
+    /// Upgrades the fleet chart.
+    pub async fn upgrade_fleet(&self) -> FleetInstallResult<ChartInfo> {
+        let req = UpgradeRequest {
+            release_name: "fleet".to_string(),
+            chart: "fleet/fleet".to_string(),
+            wait: self.wait,
+            ns: self.namespace.clone(),
+            reuse_values: true,
+            version: match self.version.clone().unwrap_or_default() {
+                Install::FollowLatest(_) => String::new(),
+                Install::Version(version) => version,
+            },
+            values: serde_json::to_vec(&json!({
+                "bootstrap": {
+                    "enabled": self.bootstrap_local_cluster.to_string(),
+                },
+                "extraEnv": [
+                    {
+                        "name": "EXPERIMENTAL_OCI_STORAGE",
+                        "value": self.feature_gates.experimental_oci_storage.to_string()
+                    },
+                    {
+                        "name": "EXPERIMENTAL_HELM_OPS",
+                        "value": self.feature_gates.experimental_helm_ops.to_string()
+                    }
+                ]
+            }))?,
+            ..Default::default()
+        };
 
-        install.args([&operation.to_string(), "fleet-crd", "fleet/fleet-crd"]);
+        debug!("Upgrading fleet chart");
 
-        if operation == &HelmOperation::Upgrade {
-            install.arg("--reuse-values");
+        let res = HelmCallImpl::upgrade(req).await;
+        if let Some(err) = res.0.err.first() {
+            return Err(FleetInstallError::FleetUpgrade(err.clone()));
         }
 
-        if self.create_namespace {
-            install.arg("--create-namespace");
+        Ok(serde_json::from_str(&res.0.data)?)
+    }
+
+    /// Installs the fleet-crd chart.
+    pub async fn install_fleet_crds(&self) -> FleetCRDInstallResult<ChartInfo> {
+        let req = InstallRequest {
+            release_name: "fleet-crd".to_string(),
+            chart: "fleet/fleet-crd".to_string(),
+            create_namespace: self.create_namespace,
+            wait: self.wait,
+            ns: self.namespace.clone(),
+            timeout: vec![300],
+            version: match self.version.clone().unwrap_or_default() {
+                Install::FollowLatest(_) => String::new(),
+                Install::Version(version) => version,
+            },
+            ..Default::default()
+        };
+
+        debug!("Installing fleet-crd chart");
+
+        let res = HelmCallImpl::install(req).await;
+        if let Some(err) = res.0.err.first() {
+            return Err(FleetCRDInstallError::CRDInstall(err.clone()));
         }
 
-        if !self.namespace.is_empty() {
-            install.args(["--namespace", &self.namespace]);
+        Ok(serde_json::from_str(&res.0.data)?)
+    }
+
+    /// Upgrades the fleet-crd chart.
+    pub async fn upgrade_fleet_crds(&self) -> FleetCRDInstallResult<ChartInfo> {
+        let req = UpgradeRequest {
+            release_name: "fleet-crd".to_string(),
+            chart: "fleet/fleet-crd".to_string(),
+            reuse_values: true,
+            wait: self.wait,
+            ns: self.namespace.clone(),
+            version: match self.version.clone().unwrap_or_default() {
+                Install::FollowLatest(_) => String::new(),
+                Install::Version(version) => version,
+            },
+            ..Default::default()
+        };
+
+        debug!("Upgrading fleet-crd chart");
+
+        let res = HelmCallImpl::upgrade(req).await;
+        if let Some(err) = res.0.err.first() {
+            return Err(FleetCRDInstallError::CRDUpgrade(err.clone()));
         }
 
-        match self.version.clone().unwrap_or_default() {
-            Install::FollowLatest(_) => {}
-            Install::Version(version) => {
-                install.args(["--version", &version]);
-            }
-        }
-
-        if self.wait {
-            install.arg("--wait");
-        }
-
-        Ok(install.spawn()?)
+        Ok(serde_json::from_str(&res.0.data)?)
     }
 }

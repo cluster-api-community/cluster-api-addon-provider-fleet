@@ -38,10 +38,7 @@ use crate::{
 use super::{
     PatchError,
     controller::{Context, patch},
-    helm::{
-        self,
-        install::{ChartSearch, FleetChart, HelmOperation},
-    },
+    helm::{self, install::FleetChart},
 };
 
 #[derive(Resource, Serialize, Deserialize, Default, Clone, Debug)]
@@ -127,7 +124,7 @@ impl FleetAddonConfig {
         };
 
         let status = self.status.get_or_insert_default();
-        chart.add_repo()?.wait().await?;
+        chart.add_repo().await?;
 
         status.conditions.push(Condition {
             last_transition_time: Time(Local::now().to_utc()),
@@ -136,17 +133,6 @@ impl FleetAddonConfig {
             reason: "RepoAdd".into(),
             status: "True".into(),
             type_: "RepoAdd".into(),
-        });
-
-        chart.update_repo()?.wait().await?;
-
-        status.conditions.push(Condition {
-            last_transition_time: Time(Local::now().to_utc()),
-            message: format!("Repo updated: {}", chart.repo),
-            observed_generation: self.metadata.generation,
-            reason: "RepoUpdate".into(),
-            status: "True".into(),
-            type_: "RepoUpdate".into(),
         });
 
         if let Some(install) = &self.spec.install {
@@ -215,38 +201,17 @@ impl FleetAddonConfig {
         let mut stream = ctx.stream.stream.lock().await;
         stream.clear();
 
-        if ctx.version >= 32 {
-            stream.push(
-                watcher::watcher(
-                    Api::all_with(ctx.client.clone(), &ApiResource::erase::<Cluster>(&())),
-                    cluster_config.streaming_lists(),
-                )
+        stream.push(
+            watcher::watcher(Api::<Cluster>::all(ctx.client.clone()), cluster_config)
+                .map(to_dynamic_event)
                 .boxed(),
-            );
+        );
 
-            stream.push(
-                watcher::watcher(
-                    Api::all_with(
-                        ctx.client.clone(),
-                        &ApiResource::erase::<v1::Namespace>(&()),
-                    ),
-                    ns_config.streaming_lists(),
-                )
+        stream.push(
+            watcher::watcher(Api::<v1::Namespace>::all(ctx.client.clone()), ns_config)
+                .map(to_dynamic_event)
                 .boxed(),
-            );
-        } else {
-            stream.push(
-                watcher::watcher(Api::<Cluster>::all(ctx.client.clone()), cluster_config)
-                    .map(to_dynamic_event)
-                    .boxed(),
-            );
-
-            stream.push(
-                watcher::watcher(Api::<v1::Namespace>::all(ctx.client.clone()), ns_config)
-                    .map(to_dynamic_event)
-                    .boxed(),
-            );
-        }
+        );
 
         info!(
             "Reconciled dynamic watches to match selectors: namespace={ns_selector}, cluster={cluster_selector}"
@@ -350,19 +315,20 @@ impl FleetAddonConfig {
             .find(|r| r.name == "fleet/fleet-crd");
         match (installed_chart_meta, search_result, expected_version) {
             (Some(installed), Some(search), Install::FollowLatest(true))
-                if search.app_version != installed.app_version =>
+                if search.chart.metadata.app_version != installed.chart.metadata.app_version =>
             {
-                chart.fleet_crds(&HelmOperation::Upgrade)?.wait().await?;
+                chart.upgrade_fleet_crds().await?;
             }
             (Some(installed), Some(_), Install::Version(expected))
-                if expected.strip_prefix("v").unwrap_or(expected) != installed.app_version =>
+                if expected.strip_prefix("v").unwrap_or(expected)
+                    != installed.chart.metadata.app_version =>
             {
-                chart.fleet_crds(&HelmOperation::Upgrade)?.wait().await?;
+                chart.upgrade_fleet_crds().await?;
             }
             (None, Some(_), _) => {
-                chart.fleet_crds(&HelmOperation::Install)?.wait().await?;
+                chart.install_fleet_crds().await?;
             }
-            (Some(_), Some(_), Install::FollowLatest(false) | Install::Version(_)) => {}
+            (Some(_), Some(_), Install::FollowLatest(_) | Install::Version(_)) => {}
             (_, _, _) => return Ok(Some(Action::requeue(Duration::from_secs(10)))),
         }
 
@@ -379,50 +345,52 @@ impl FleetAddonConfig {
             expected_version,
         ) {
             (Some(installed), Some(search), Install::FollowLatest(true))
-                if search.app_version != installed.app_version =>
+                if search.chart.metadata.app_version != installed.chart.metadata.app_version =>
             {
-                chart.fleet(&HelmOperation::Upgrade)?.wait().await?;
+                let info = chart.upgrade_fleet().await?;
+                let version = info.chart.metadata.app_version;
+                status.installed_version = Some(version.clone());
                 status.conditions.push(Condition {
                     last_transition_time: Time(Local::now().to_utc()),
-                    message: format!("Updated fleet to version {}", search.app_version),
+                    message: format!("Updated fleet to version {version}"),
                     observed_generation: self.metadata.generation,
                     reason: "Installed".into(),
                     status: "True".into(),
                     type_: "Installed".into(),
                 });
-                status.installed_version = search.app_version.clone().into();
             }
             (Some(installed), Some(_), Install::Version(expected))
-                if expected.strip_prefix("v").unwrap_or(expected) != installed.app_version =>
+                if expected.strip_prefix("v").unwrap_or(expected)
+                    != installed.chart.metadata.app_version =>
             {
-                chart.fleet(&HelmOperation::Upgrade)?.wait().await?;
+                let info = chart.upgrade_fleet().await?;
+                let version = info.chart.metadata.app_version;
+                status.installed_version = Some(version.clone());
                 status.conditions.push(Condition {
                     last_transition_time: Time(Local::now().to_utc()),
-                    message: format!("Updated fleet to version {expected}"),
+                    message: format!("Updated fleet to version {version}"),
                     observed_generation: self.metadata.generation,
                     reason: "Installed".into(),
                     status: "True".into(),
                     type_: "Installed".into(),
                 });
-                status.installed_version = expected.clone().into();
             }
-            (None, Some(ChartSearch { app_version, .. }), Install::FollowLatest(_))
-            | (None, Some(_), Install::Version(app_version)) => {
-                chart.fleet(&HelmOperation::Install)?.wait().await?;
+            (None, Some(_), Install::FollowLatest(_) | Install::Version(_)) => {
+                let info = chart.install_fleet().await?;
+                let version = info.chart.metadata.app_version;
+                status.installed_version = Some(version.clone());
                 status.conditions.push(Condition {
                     last_transition_time: Time(Local::now().to_utc()),
-                    message: format!("Installed fleet version {app_version}"),
+                    message: format!("Installed fleet version {version}"),
                     observed_generation: self.metadata.generation,
                     reason: "Installed".into(),
                     status: "True".into(),
                     type_: "Installed".into(),
                 });
-                status.installed_version = app_version.clone().into();
             }
-            (Some(installed), Some(_), Install::FollowLatest(false)) => {
-                status.installed_version = installed.app_version.into();
+            (Some(installed), Some(_), Install::FollowLatest(_) | Install::Version(_)) => {
+                status.installed_version = installed.chart.metadata.app_version.into();
             }
-            (Some(_), Some(_), Install::Version(_)) => {}
             (_, _, _) => return Ok(Some(Action::requeue(Duration::from_secs(10)))),
         }
 
